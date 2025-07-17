@@ -32,21 +32,13 @@ if (missingEnvVars.length > 0) {
 // Middleware
 app.use(helmet());
 app.use(cors({ 
-  origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.vercel.app'] // Use environment variable
-    : ['http://localhost:3000'], 
+  origin: ['http://localhost:3000'], 
   credentials: true 
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files (for Vercel, use absolute paths)
-if (process.env.NODE_ENV !== 'production') {
-  app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-} else {
-  // For production, you might want to use a CDN or cloud storage
-  // app.use('/uploads', express.static('/tmp/uploads'));
-}
+
 
 // Rate Limiting - adjusted for serverless
 const limiter = rateLimit({ 
