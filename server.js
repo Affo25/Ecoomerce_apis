@@ -6,6 +6,18 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 require('dotenv').config();
 
+// Test route loading
+try {
+  require('./routes/products');
+  require('./routes/orders');
+  require('./routes/admin');
+  require('./routes/auth');
+  console.log('✅ All routes loaded successfully');
+} catch (error) {
+  console.error('❌ Error loading routes:', error);
+  process.exit(1);
+}
+
 const app = express();
 
 // Validate required environment variables
@@ -44,6 +56,11 @@ app.use(limiter);
 // MongoDB Connection with better error handling
 const connectDB = async () => {
   try {
+    if (!process.env.MONGODB_URI) {
+      console.error('❌ MONGODB_URI environment variable is not set');
+      return;
+    }
+    
     await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
@@ -73,10 +90,10 @@ app.get('/api/health', (req, res) => {
 });
 
 // Routes
-app.use('/api/products', require('../routes/products'));
-app.use('/api/orders', require('../routes/orders'));
-app.use('/api/admin', require('../routes/admin'));
-app.use('/api/auth', require('../routes/auth'));
+app.use('/api/products', require('./routes/products'));
+app.use('/api/orders', require('./routes/orders'));
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/auth', require('./routes/auth'));
 
 // Global error handler
 app.use((err, req, res, next) => {
