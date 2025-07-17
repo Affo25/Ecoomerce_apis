@@ -25,10 +25,10 @@ mongoose.connect(process.env.MONGODB_URI, {})
   .catch((err) => console.error('❌ MongoDB error:', err));
 
 // Routes
-app.use('/api/products', require('../routes/products'));
-app.use('/api/orders', require('../routes/orders'));
-app.use('/api/admin', require('../routes/admin'));
-app.use('/api/auth', require('../routes/auth'));
+app.use('/api/products', require('./routes/products'));
+app.use('/api/orders', require('./routes/orders'));
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/auth', require('./routes/auth'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Server is running' });
