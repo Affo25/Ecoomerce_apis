@@ -33,27 +33,32 @@ if (missingEnvVars.length > 0) {
 app.use(helmet());
 app.use(cors({ 
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://your-frontend-domain.vercel.app'] // Replace with your actual frontend domain
+    ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.vercel.app'] // Use environment variable
     : ['http://localhost:3000'], 
   credentials: true 
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Only serve static files in development
+// Serve static files (for Vercel, use absolute paths)
 if (process.env.NODE_ENV !== 'production') {
   app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+} else {
+  // For production, you might want to use a CDN or cloud storage
+  // app.use('/uploads', express.static('/tmp/uploads'));
 }
 
-// Rate Limiting
+// Rate Limiting - adjusted for serverless
 const limiter = rateLimit({ 
   windowMs: 15 * 60 * 1000, 
   max: 100,
-  message: { error: 'Too many requests, please try again later.' }
+  message: { error: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use(limiter);
 
-// MongoDB Connection with better error handling
+// MongoDB Connection with better error handling and serverless optimization
 const connectDB = async () => {
   try {
     if (!process.env.MONGODB_URI) {
@@ -61,9 +66,17 @@ const connectDB = async () => {
       return;
     }
     
+    // Check if already connected
+    if (mongoose.connection.readyState === 1) {
+      console.log('✅ Already connected to MongoDB');
+      return;
+    }
+    
     await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
     });
     console.log('✅ Connected to MongoDB');
   } catch (err) {
@@ -75,9 +88,6 @@ const connectDB = async () => {
   }
 };
 
-// Connect to MongoDB
-connectDB();
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
@@ -85,9 +95,13 @@ app.get('/api/health', (req, res) => {
     status: 'OK', 
     message: 'Server is running',
     database: dbStatus,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
+
+// Connect to MongoDB before setting up routes
+connectDB();
 
 // Routes
 app.use('/api/products', require('./routes/products'));
@@ -144,7 +158,7 @@ app.use('*', (req, res) => {
 
 // For local development
 if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 5000;
+  const PORT = process.env.PORT || 5009;
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
   });
