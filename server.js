@@ -91,6 +91,27 @@ app.get('/api/debug/images', (req, res) => {
   }
 });
 
+// Placeholder image endpoint
+app.get('/api/placeholder/:width/:height', (req, res) => {
+  const { width, height } = req.params;
+  const w = parseInt(width) || 64;
+  const h = parseInt(height) || 64;
+  
+  // Create a simple SVG placeholder
+  const svg = `
+    <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="${w}" height="${h}" fill="#E5E7EB"/>
+      <rect x="${w/4}" y="${h/4}" width="${w/2}" height="${h/2}" rx="4" fill="#9CA3AF"/>
+      <circle cx="${w/2}" cy="${h/2 - h/8}" r="${h/12}" fill="#6B7280"/>
+      <path d="M${w/2 - w/8} ${h/2 + h/16} L${w/2} ${h/2 - h/16} L${w/2 + w/8} ${h/2 + h/16} L${w/2 + w/16} ${h/2 + h/8} L${w/2 - w/16} ${h/2 + h/8} Z" fill="#6B7280"/>
+    </svg>
+  `;
+  
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+  res.send(svg);
+});
+
 // Rate Limiting
 const limiter = rateLimit({ 
   windowMs: 15 * 60 * 1000, 
