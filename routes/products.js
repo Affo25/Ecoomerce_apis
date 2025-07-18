@@ -1,6 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const Product = require('../models/Product');
+const multer = require('multer');
+const path = require('path');
+
+// Set up multer storage
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, path.join(__dirname, '../images/'));
+  },
+  filename: function (req, file, cb) {
+    // Save with original name + timestamp
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage: storage });
 
 // Get all products with filtering and pagination
 router.get('/', async (req, res) => {
@@ -101,12 +116,16 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Create new product (admin only)
-router.post('/', async (req, res) => {
+// Create new product (admin only) with image upload
+router.post('/', upload.single('image'), async (req, res) => {
   try {
-    console.log('Request body:', req.body); // Debug log
-    
-    const product = new Product(req.body);
+    // req.body will have text fields, req.file will have the image
+    const productData = req.body;
+    if (req.file) {
+      productData.image = req.file.filename; // or store the full path if needed
+    }
+
+    const product = new Product(productData);
     await product.save();
     res.status(201).json({
       success: true,
