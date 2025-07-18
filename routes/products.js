@@ -4,17 +4,71 @@ const Product = require('../models/Product');
 const multer = require('multer');
 const path = require('path');
 
-// Set up multer storage - save to admin project images folder
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, '../../admin/images/'));
-  },
-  filename: function (req, file, cb) {
-    // Save with original name + timestamp
+// Set up multer storage - use memory storage for production
+const fs = require('fs');
+
+// Helper function to upload to cloud storage (for production)
+const uploadToCloudStorage = async (file) => {
+  try {
+    // For production, you should implement cloud storage here
+    
+    // Option 1: Cloudinary (recommended)
+    if (process.env.CLOUDINARY_URL) {
+      const cloudinary = require('cloudinary').v2;
+      
+      return new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          { 
+            resource_type: 'image',
+            folder: 'products',
+            public_id: `${Date.now()}-${Math.round(Math.random() * 1E9)}`
+          },
+          (error, result) => {
+            if (error) {
+              console.error('Cloudinary upload error:', error);
+              reject(error);
+            } else {
+              resolve(result.secure_url);
+            }
+          }
+        ).end(file.buffer);
+      });
+    }
+    
+    // Option 2: Base64 encode and store in database (not recommended for large files)
+    // const base64Image = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+    // return base64Image;
+    
+    // Fallback: Return placeholder (you need to implement actual cloud storage)
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
+    return `/images/${uniqueSuffix}-${file.originalname}`;
+    
+  } catch (error) {
+    console.error('Cloud storage upload error:', error);
+    throw error;
   }
-});
+};
+
+// For production, we'll use memory storage and upload to cloud storage
+// For local development, we'll use disk storage
+const storage = process.env.NODE_ENV === 'production' 
+  ? multer.memoryStorage() // Store in memory for production
+  : multer.diskStorage({
+      destination: function (req, file, cb) {
+        const uploadPath = path.join(__dirname, '../../admin/images/');
+        // Create directory if it doesn't exist
+        if (!fs.existsSync(uploadPath)) {
+          fs.mkdirSync(uploadPath, { recursive: true });
+        }
+        cb(null, uploadPath);
+      },
+      filename: function (req, file, cb) {
+        // Save with original name + timestamp
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + '-' + file.originalname);
+      }
+    });
+
 const upload = multer({ 
   storage: storage,
   limits: {
@@ -189,8 +243,16 @@ router.post('/', (req, res) => {
 
       // Handle uploaded images
       if (req.files && req.files.length > 0) {
-        // Store image paths relative to server root for serving
-        productData.images = req.files.map(file => `/images/${file.filename}`);
+        if (process.env.NODE_ENV === 'production') {
+          // For production, upload to cloud storage
+          const imageUrls = await Promise.all(
+            req.files.map(file => uploadToCloudStorage(file))
+          );
+          productData.images = imageUrls;
+        } else {
+          // For local development, use local file paths
+          productData.images = req.files.map(file => `/images/${file.filename}`);
+        }
         console.log(`📸 Uploaded ${req.files.length} images:`, productData.images);
       }
 
@@ -289,10 +351,17 @@ router.put('/:id', (req, res) => {
 
       // Handle new uploaded images
       if (req.files && req.files.length > 0) {
-        // Store image paths relative to server root for serving
-        const newImages = req.files.map(file => `/images/${file.filename}`);
-        // Replace existing images with new ones (you can modify this logic as needed)
-        productData.images = newImages;
+        if (process.env.NODE_ENV === 'production') {
+          // For production, upload to cloud storage
+          const newImages = await Promise.all(
+            req.files.map(file => uploadToCloudStorage(file))
+          );
+          productData.images = newImages;
+        } else {
+          // For local development, use local file paths
+          const newImages = req.files.map(file => `/images/${file.filename}`);
+          productData.images = newImages;
+        }
         console.log(`📸 Updated with ${req.files.length} new images:`, productData.images);
       }
 
