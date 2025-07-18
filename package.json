@@ -8,7 +8,8 @@
     "dev": "nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "test-db": "node test-db.js",
-    "test-connection": "node test-connection-simple.js"
+    "test-connection": "node test-connection-simple.js",
+    "test-product": "node test-product-creation.js"
   },
   "engines": {
     "node": "18.x"
