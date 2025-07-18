@@ -60,6 +60,37 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Serve static files from images directory
+app.use('/images', express.static(path.join(__dirname, 'images')));
+
+// Debug endpoint to check images directory
+app.get('/api/debug/images', (req, res) => {
+  const fs = require('fs');
+  const imagePath = path.join(__dirname, 'images');
+  
+  try {
+    const files = fs.readdirSync(imagePath);
+    res.json({
+      success: true,
+      message: 'Images directory contents',
+      data: {
+        path: imagePath,
+        files: files,
+        count: files.length
+      }
+    });
+  } catch (error) {
+    res.json({
+      success: false,
+      message: 'Error reading images directory',
+      data: {
+        path: imagePath,
+        error: error.message
+      }
+    });
+  }
+});
+
 // Rate Limiting
 const limiter = rateLimit({ 
   windowMs: 15 * 60 * 1000, 

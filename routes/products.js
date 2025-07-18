@@ -83,7 +83,7 @@ const storage = process.env.NODE_ENV === 'production'
   ? multer.memoryStorage() // Store in memory for production
   : multer.diskStorage({
       destination: function (req, file, cb) {
-        const uploadPath = path.join(__dirname, '../../admin/images/');
+        const uploadPath = path.join(__dirname, '../images/');
         // Create directory if it doesn't exist
         if (!fs.existsSync(uploadPath)) {
           fs.mkdirSync(uploadPath, { recursive: true });
@@ -286,6 +286,9 @@ router.post('/', (req, res) => {
 
       // Handle uploaded images
       if (req.files && req.files.length > 0) {
+        console.log(`📸 Processing ${req.files.length} uploaded files...`);
+        console.log('Files info:', req.files.map(f => ({ filename: f.filename, path: f.path, size: f.size })));
+        
         if (process.env.NODE_ENV === 'production') {
           // For production, upload to cloud storage
           const imageUrls = await Promise.all(
@@ -297,6 +300,8 @@ router.post('/', (req, res) => {
           productData.images = req.files.map(file => `/images/${file.filename}`);
         }
         console.log(`📸 Uploaded ${req.files.length} images:`, productData.images);
+      } else {
+        console.log('📸 No files uploaded');
       }
 
       const product = new Product(productData);
@@ -394,6 +399,9 @@ router.put('/:id', (req, res) => {
 
       // Handle new uploaded images
       if (req.files && req.files.length > 0) {
+        console.log(`📸 Processing ${req.files.length} uploaded files for update...`);
+        console.log('Files info:', req.files.map(f => ({ filename: f.filename, path: f.path, size: f.size })));
+        
         if (process.env.NODE_ENV === 'production') {
           // For production, upload to cloud storage
           const newImages = await Promise.all(
@@ -406,6 +414,8 @@ router.put('/:id', (req, res) => {
           productData.images = newImages;
         }
         console.log(`📸 Updated with ${req.files.length} new images:`, productData.images);
+      } else {
+        console.log('📸 No new files uploaded for update');
       }
 
       const product = await Product.findByIdAndUpdate(
