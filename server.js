@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 require('dotenv').config();
 const serverless = require('serverless-http');
 
@@ -57,6 +58,9 @@ const connectDB = async () => {
 };
 
 connectDB();
+
+// Serve static files from admin images directory
+app.use('/images', express.static(path.join(__dirname, '../admin/images')));
 
 // Routes
 app.use('/api/products', require('./routes/products'));
