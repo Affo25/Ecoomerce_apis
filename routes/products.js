@@ -3,6 +3,34 @@ const router = express.Router();
 const Product = require('../models/Product');
 const multer = require('multer');
 const path = require('path');
+const mongoose = require('mongoose');
+
+// Debug endpoint to test database connection and products
+router.get('/debug', async (req, res) => {
+  try {
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    const productCount = await Product.countDocuments();
+    const activeProductCount = await Product.countDocuments({ is_active: true });
+    
+    res.json({
+      success: true,
+      message: 'Debug info',
+      data: {
+        database: dbStatus,
+        environment: process.env.NODE_ENV || 'development',
+        totalProducts: productCount,
+        activeProducts: activeProductCount,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Debug failed',
+      error: error.message
+    });
+  }
+});
 
 // Set up multer storage - use memory storage for production
 const fs = require('fs');
@@ -88,6 +116,11 @@ const upload = multer({
 // Get all products with filtering and pagination
 router.get('/', async (req, res) => {
   try {
+    // Ensure database connection
+    if (!mongoose.connection.readyState) {
+      throw new Error('Database not connected');
+    }
+
     const {
       category,
       page = 1,
@@ -98,8 +131,8 @@ router.get('/', async (req, res) => {
     } = req.query;
 
     // Build filter object
-    const filter = {};
-    if (category) filter.category = category;
+    const filter = { is_active: true }; // Only show active products
+    if (category) filter.categories = { $in: [category] }; // Fixed: categories is an array
     if (minPrice || maxPrice) {
       filter.price = {};
       if (minPrice) filter.price.$gte = parseFloat(minPrice);
@@ -117,7 +150,7 @@ router.get('/', async (req, res) => {
         break;
       case 'newest':
       default:
-        sortObj.createdAt = -1;
+        sortObj.created_at = -1;
         break;
     }
 
@@ -148,9 +181,19 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching products:', error);
+    
+    // More specific error handling
+    if (error.name === 'MongoServerError' || error.name === 'MongoNetworkError') {
+      return res.status(503).json({ 
+        success: false,
+        message: 'Database connection error',
+        data: null
+      });
+    }
+    
     res.status(500).json({ 
       success: false,
-      message: 'Failed to fetch products',
+      message: process.env.NODE_ENV === 'production' ? 'Failed to fetch products' : error.message,
       data: null
     });
   }

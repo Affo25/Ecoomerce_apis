@@ -22,15 +22,15 @@ const reviewSchema = new mongoose.Schema({
 }, { _id: false });
 
 const productSchema = new mongoose.Schema({
-  name: { type: String,  },
-  slug: { type: String,  unique: true },
+  name: { type: String, required: true },
+  slug: { type: String, required: true, unique: true },
   description: String,
   short_description: String,
   sku: String,
-  brand_id: String, // Added missing field
-  categories: [String], // Added missing field
-  tags: [String], // Added missing field
-  price: { type: Number },
+  brand_id: String,
+  categories: [String],
+  tags: [String],
+  price: { type: Number, required: true },
   sale_price: Number,
   currency: { type: String, default: 'USD' },
   quantity_in_stock: { type: Number, default: 0 },
