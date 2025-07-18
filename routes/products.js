@@ -117,7 +117,7 @@ const upload = multer({
 router.get('/', async (req, res) => {
   try {
     // Ensure database connection
-    if (!mongoose.connection.readyState) {
+    if (mongoose.connection.readyState !== 1) {
       throw new Error('Database not connected');
     }
 

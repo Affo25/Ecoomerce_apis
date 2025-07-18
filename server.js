@@ -15,7 +15,9 @@ const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
   console.error('❌ Missing required environment variables:', missingEnvVars);
-  process.exit(1);
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
 }
 
 // Middleware
@@ -73,61 +75,94 @@ let isConnected = false;
 
 const connectDB = async () => {
   try {
+    // Check if we already have a good connection
     if (isConnected && mongoose.connection.readyState === 1) {
-      return;
+      return mongoose.connection;
     }
 
-    if (mongoose.connection.readyState !== 1) {
-      const options = {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 5000,
-        socketTimeoutMS: 45000,
-        maxPoolSize: 10,
-        bufferCommands: false,
-        bufferMaxEntries: 0,
-      };
-
-      // Add additional options for production
-      if (process.env.NODE_ENV === 'production') {
-        options.maxPoolSize = 1; // Optimize for serverless
-        options.serverSelectionTimeoutMS = 3000; // Reduce timeout
-        options.socketTimeoutMS = 15000; // Reduce timeout
-      }
-
-      await mongoose.connect(process.env.MONGODB_URI, options);
-      isConnected = true;
-      console.log('✅ Connected to MongoDB');
+    // If there's a stale connection, close it
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
     }
+
+    // Validate MongoDB URI
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MONGODB_URI environment variable is not set');
+    }
+
+    const options = {
+      serverSelectionTimeoutMS: 10000, // Increased timeout
+      socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+    };
+
+    // Add additional options for production
+    if (process.env.NODE_ENV === 'production') {
+      options.maxPoolSize = 1; // Optimize for serverless
+      options.serverSelectionTimeoutMS = 5000; // Reduce timeout for production
+      options.socketTimeoutMS = 15000; // Reduce timeout
+    }
+
+    console.log('🔄 Connecting to MongoDB...');
+    console.log('📍 MongoDB URI:', process.env.MONGODB_URI ? process.env.MONGODB_URI.replace(/:\/\/([^:]+):([^@]+)@/, '://[USERNAME]:[PASSWORD]@') : 'NOT SET');
+    
+    const connection = await mongoose.connect(process.env.MONGODB_URI, options);
+    
+    isConnected = true;
+    console.log('✅ Connected to MongoDB successfully');
+    
+    return connection;
   } catch (err) {
     console.error('❌ MongoDB connection error:', err);
     isConnected = false;
     
-    if (process.env.NODE_ENV !== 'production') {
-      process.exit(1);
+    // Log more details about the error
+    if (err.message.includes('ENOTFOUND')) {
+      console.error('❌ DNS resolution failed - check MongoDB URI');
+    } else if (err.message.includes('authentication')) {
+      console.error('❌ Authentication failed - check credentials');
+    } else if (err.message.includes('timeout')) {
+      console.error('❌ Connection timeout - check network/firewall');
     }
     
-    // In production, throw the error to be handled by the route
     throw err;
   }
 };
 
-// Connect to database
-connectDB().catch(console.error);
+// Initial connection attempt (but don't exit on failure in production)
+connectDB().catch(err => {
+  console.error('Initial connection failed:', err);
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(1);
+  }
+});
 
 // Middleware to ensure database connection for each request (serverless)
 const ensureDbConnection = async (req, res, next) => {
   try {
-    if (!isConnected || mongoose.connection.readyState !== 1) {
-      await connectDB();
-    }
+    // Always attempt to connect on each request in serverless
+    await connectDB();
     next();
   } catch (error) {
-    console.error('Database connection failed:', error);
+    console.error('Database connection failed in middleware:', error);
+    
+    // Provide more specific error messages
+    let errorMessage = 'Database connection failed';
+    if (error.message.includes('ENOTFOUND')) {
+      errorMessage = 'Database server not found';
+    } else if (error.message.includes('authentication')) {
+      errorMessage = 'Database authentication failed';
+    } else if (error.message.includes('timeout')) {
+      errorMessage = 'Database connection timeout';
+    } else if (error.message.includes('MONGODB_URI')) {
+      errorMessage = 'Database configuration error';
+    }
+    
     res.status(503).json({ 
       success: false,
-      message: 'Database connection failed',
-      data: null
+      message: errorMessage,
+      data: null,
+      error: process.env.NODE_ENV === 'production' ? null : error.message
     });
   }
 };
