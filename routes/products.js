@@ -4,6 +4,10 @@ const Product = require('../models/Product');
 const multer = require('multer');
 const path = require('path');
 const mongoose = require('mongoose');
+const fs = require('fs');
+
+// Import Cloudinary configuration
+const { uploadToCloudinary, deleteFromCloudinary, getOptimizedImageUrl } = require('../config/cloudinary');
 
 // Debug endpoint to test database connection and products
 router.get('/debug', async (req, res) => {
@@ -20,6 +24,7 @@ router.get('/debug', async (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         totalProducts: productCount,
         activeProducts: activeProductCount,
+        cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
         timestamp: new Date().toISOString()
       }
     });
@@ -32,73 +37,9 @@ router.get('/debug', async (req, res) => {
   }
 });
 
-// Set up multer storage - use memory storage for production
-const fs = require('fs');
-
-// Helper function to upload to cloud storage (for production)
-const uploadToCloudStorage = async (file) => {
-  try {
-    // For production, you should implement cloud storage here
-    
-    // Option 1: Cloudinary (recommended)
-    if (process.env.CLOUDINARY_URL) {
-      const cloudinary = require('cloudinary').v2;
-      
-      return new Promise((resolve, reject) => {
-        cloudinary.uploader.upload_stream(
-          { 
-            resource_type: 'image',
-            folder: 'products',
-            public_id: `${Date.now()}-${Math.round(Math.random() * 1E9)}`
-          },
-          (error, result) => {
-            if (error) {
-              console.error('Cloudinary upload error:', error);
-              reject(error);
-            } else {
-              resolve(result.secure_url);
-            }
-          }
-        ).end(file.buffer);
-      });
-    }
-    
-    // Option 2: Base64 encode and store in database (not recommended for large files)
-    // const base64Image = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-    // return base64Image;
-    
-    // Fallback: Return placeholder (you need to implement actual cloud storage)
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    return `/images/${uniqueSuffix}-${file.originalname}`;
-    
-  } catch (error) {
-    console.error('Cloud storage upload error:', error);
-    throw error;
-  }
-};
-
-// For production, we'll use memory storage and upload to cloud storage
-// For local development, we'll use disk storage
-const storage = process.env.NODE_ENV === 'production' 
-  ? multer.memoryStorage() // Store in memory for production
-  : multer.diskStorage({
-      destination: function (req, file, cb) {
-        const uploadPath = path.join(__dirname, '../images/');
-        // Create directory if it doesn't exist
-        if (!fs.existsSync(uploadPath)) {
-          fs.mkdirSync(uploadPath, { recursive: true });
-        }
-        cb(null, uploadPath);
-      },
-      filename: function (req, file, cb) {
-        // Save with original name + timestamp
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + '-' + file.originalname);
-      }
-    });
-
-const upload = multer({ 
-  storage: storage,
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB per file
     files: 10 // Maximum 10 files
@@ -127,12 +68,26 @@ router.get('/', async (req, res) => {
       limit = 12,
       sort = 'newest',
       minPrice,
-      maxPrice
+      maxPrice,
+      search
     } = req.query;
 
     // Build filter object
     const filter = { is_active: true }; // Only show active products
-    if (category) filter.categories = { $in: [category] }; // Fixed: categories is an array
+
+    // Apply filters
+    if (category && category !== 'all') {
+      filter.category = category;
+    }
+
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { category: { $regex: search, $options: 'i' } }
+      ];
+    }
+
     if (minPrice || maxPrice) {
       filter.price = {};
       if (minPrice) filter.price.$gte = parseFloat(minPrice);
@@ -143,25 +98,31 @@ router.get('/', async (req, res) => {
     let sortObj = {};
     switch (sort) {
       case 'price-low':
-        sortObj.price = 1;
+        sortObj = { price: 1 };
         break;
       case 'price-high':
-        sortObj.price = -1;
+        sortObj = { price: -1 };
+        break;
+      case 'name':
+        sortObj = { name: 1 };
         break;
       case 'newest':
       default:
-        sortObj.created_at = -1;
+        sortObj = { createdAt: -1 };
         break;
     }
 
+    // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // Execute query
     const products = await Product.find(filter)
       .sort(sortObj)
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
+    // Get total count for pagination
     const total = await Product.countDocuments(filter);
     const totalPages = Math.ceil(total / parseInt(limit));
 
@@ -176,25 +137,15 @@ router.get('/', async (req, res) => {
           total,
           hasNext: parseInt(page) < totalPages,
           hasPrev: parseInt(page) > 1,
-        },
+        }
       }
     });
   } catch (error) {
     console.error('Error fetching products:', error);
-    
-    // More specific error handling
-    if (error.name === 'MongoServerError' || error.name === 'MongoNetworkError') {
-      return res.status(503).json({ 
-        success: false,
-        message: 'Database connection error',
-        data: null
-      });
-    }
-    
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: process.env.NODE_ENV === 'production' ? 'Failed to fetch products' : error.message,
-      data: null
+      message: 'Failed to fetch products',
+      error: error.message
     });
   }
 });
@@ -205,13 +156,12 @@ router.get('/:id', async (req, res) => {
     const product = await Product.findById(req.params.id).lean();
     
     if (!product) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        message: 'Product not found',
-        data: null
+        message: 'Product not found'
       });
     }
-    
+
     res.json({
       success: true,
       message: 'Product fetched successfully',
@@ -219,261 +169,234 @@ router.get('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching product:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Failed to fetch product',
-      data: null
+      error: error.message
     });
   }
 });
 
-// Create new product (admin only) with multiple image upload
-router.post('/', (req, res) => {
-  upload.array('images', 10)(req, res, async (err) => {
-    if (err) {
-      console.error('Upload error:', err);
-      
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({
-            success: false,
-            message: 'File size too large. Maximum 5MB per image.',
-            data: null
-          });
-        }
-        if (err.code === 'LIMIT_FILE_COUNT') {
-          return res.status(400).json({
-            success: false,
-            message: 'Too many files. Maximum 10 images allowed.',
-            data: null
-          });
-        }
-        return res.status(400).json({
-          success: false,
-          message: `Upload error: ${err.message}`,
-          data: null
-        });
-      }
-      
-      return res.status(400).json({
-        success: false,
-        message: err.message,
-        data: null
-      });
-    }
-    
-    try {
-      // req.body will have text fields, req.files will have the images
-      const productData = req.body;
-      
-      // Parse JSON fields that were stringified in FormData
-      const fieldsToParseJSON = ['categories', 'tags', 'dimensions', 'attributes', 'meta_keywords', 'videos'];
-      fieldsToParseJSON.forEach(field => {
-        if (productData[field]) {
-          try {
-            productData[field] = JSON.parse(productData[field]);
-          } catch (e) {
-            console.warn(`Failed to parse ${field}:`, e);
-          }
-        }
-      });
-
-      // Convert string booleans to actual booleans
-      if (productData.featured === 'true') productData.featured = true;
-      if (productData.featured === 'false') productData.featured = false;
-      if (productData.is_active === 'true') productData.is_active = true;
-      if (productData.is_active === 'false') productData.is_active = false;
-
-      // Handle uploaded images
-      if (req.files && req.files.length > 0) {
-        console.log(`📸 Processing ${req.files.length} uploaded files...`);
-        console.log('Files info:', req.files.map(f => ({ filename: f.filename, path: f.path, size: f.size })));
-        
-        if (process.env.NODE_ENV === 'production') {
-          // For production, upload to cloud storage
-          const imageUrls = await Promise.all(
-            req.files.map(file => uploadToCloudStorage(file))
-          );
-          productData.images = imageUrls;
-        } else {
-          // For local development, use local file paths
-          productData.images = req.files.map(file => `/images/${file.filename}`);
-        }
-        console.log(`📸 Uploaded ${req.files.length} images:`, productData.images);
-      } else {
-        console.log('📸 No files uploaded');
-      }
-
-      const product = new Product(productData);
-      await product.save();
-      res.status(201).json({
-        success: true,
-        message: `Product created successfully with ${req.files ? req.files.length : 0} images`,
-        data: product
-      });
-    } catch (error) {
-      console.error('Error creating product:', error);
-      
-      // Provide more specific error information
-      if (error.name === 'ValidationError') {
-        const validationErrors = Object.values(error.errors).map(err => err.message);
-        return res.status(400).json({ 
-          success: false,
-          message: 'Validation failed',
-          data: { details: validationErrors }
-        });
-      }
-      
-      if (error.code === 11000) {
-        return res.status(400).json({ 
-          success: false,
-          message: 'Product with this slug already exists',
-          data: null
-        });
-      }
-      
-      res.status(500).json({ 
-        success: false,
-        message: 'Failed to create product',
-        data: null
-      });
-    }
-  });
-});
-
-// Update product (admin only) with multiple image upload
-router.put('/:id', (req, res) => {
-  upload.array('images', 10)(req, res, async (err) => {
-    if (err) {
-      console.error('Upload error:', err);
-      
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({
-            success: false,
-            message: 'File size too large. Maximum 5MB per image.',
-            data: null
-          });
-        }
-        if (err.code === 'LIMIT_FILE_COUNT') {
-          return res.status(400).json({
-            success: false,
-            message: 'Too many files. Maximum 10 images allowed.',
-            data: null
-          });
-        }
-        return res.status(400).json({
-          success: false,
-          message: `Upload error: ${err.message}`,
-          data: null
-        });
-      }
-      
-      return res.status(400).json({
-        success: false,
-        message: err.message,
-        data: null
-      });
-    }
-    
-    try {
-      const productData = req.body;
-      
-      // Parse JSON fields that were stringified in FormData
-      const fieldsToParseJSON = ['categories', 'tags', 'dimensions', 'attributes', 'meta_keywords', 'videos'];
-      fieldsToParseJSON.forEach(field => {
-        if (productData[field]) {
-          try {
-            productData[field] = JSON.parse(productData[field]);
-          } catch (e) {
-            console.warn(`Failed to parse ${field}:`, e);
-          }
-        }
-      });
-
-      // Convert string booleans to actual booleans
-      if (productData.featured === 'true') productData.featured = true;
-      if (productData.featured === 'false') productData.featured = false;
-      if (productData.is_active === 'true') productData.is_active = true;
-      if (productData.is_active === 'false') productData.is_active = false;
-
-      // Handle new uploaded images
-      if (req.files && req.files.length > 0) {
-        console.log(`📸 Processing ${req.files.length} uploaded files for update...`);
-        console.log('Files info:', req.files.map(f => ({ filename: f.filename, path: f.path, size: f.size })));
-        
-        if (process.env.NODE_ENV === 'production') {
-          // For production, upload to cloud storage
-          const newImages = await Promise.all(
-            req.files.map(file => uploadToCloudStorage(file))
-          );
-          productData.images = newImages;
-        } else {
-          // For local development, use local file paths
-          const newImages = req.files.map(file => `/images/${file.filename}`);
-          productData.images = newImages;
-        }
-        console.log(`📸 Updated with ${req.files.length} new images:`, productData.images);
-      } else {
-        console.log('📸 No new files uploaded for update');
-      }
-
-      const product = await Product.findByIdAndUpdate(
-        req.params.id,
-        productData,
-        { new: true, runValidators: true }
-      );
-      
-      if (!product) {
-        return res.status(404).json({ 
-          success: false,
-          message: 'Product not found',
-          data: null
-        });
-      }
-      
-      res.json({
-        success: true,
-        message: `Product updated successfully${req.files ? ` with ${req.files.length} new images` : ''}`,
-        data: product
-      });
-    } catch (error) {
-      console.error('Error updating product:', error);
-      res.status(500).json({ 
-        success: false,
-        message: 'Failed to update product',
-        data: null
-      });
-    }
-  });
-});
-
-// Delete product (admin only)
-router.delete('/:id', async (req, res) => {
+// Create new product
+router.post('/', upload.array('images', 10), async (req, res) => {
   try {
-    const product = await Product.findByIdAndDelete(req.params.id);
+    const productData = req.body;
     
-    if (!product) {
-      return res.status(404).json({ 
+    // Handle image uploads
+    const imageUrls = [];
+    if (req.files && req.files.length > 0) {
+      console.log(`Uploading ${req.files.length} images to Cloudinary...`);
+      
+      for (const file of req.files) {
+        try {
+          const result = await uploadToCloudinary(file, 'products');
+          imageUrls.push(result.url);
+          console.log(`Image uploaded: ${result.url}`);
+        } catch (uploadError) {
+          console.error('Error uploading image:', uploadError);
+          // Continue with other images if one fails
+        }
+      }
+    }
+
+    // Create product with uploaded image URLs
+    const product = new Product({
+      ...productData,
+      images: imageUrls,
+      is_active: true
+    });
+
+    await product.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      data: product
+    });
+  } catch (error) {
+    console.error('Error creating product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create product',
+      error: error.message
+    });
+  }
+});
+
+// Update product
+router.put('/:id', upload.array('images', 10), async (req, res) => {
+  try {
+    const productData = req.body;
+    const existingProduct = await Product.findById(req.params.id);
+    
+    if (!existingProduct) {
+      return res.status(404).json({
         success: false,
-        message: 'Product not found',
-        data: null
+        message: 'Product not found'
       });
     }
+
+    // Handle new image uploads
+    const imageUrls = [...(existingProduct.images || [])];
     
+    if (req.files && req.files.length > 0) {
+      console.log(`Uploading ${req.files.length} new images to Cloudinary...`);
+      
+      for (const file of req.files) {
+        try {
+          const result = await uploadToCloudinary(file, 'products');
+          imageUrls.push(result.url);
+          console.log(`Image uploaded: ${result.url}`);
+        } catch (uploadError) {
+          console.error('Error uploading image:', uploadError);
+        }
+      }
+    }
+
+    // Update product
+    const updatedProduct = await Product.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...productData,
+        images: imageUrls
+      },
+      { new: true, runValidators: true }
+    );
+
     res.json({
       success: true,
-      message: 'Product deleted successfully',
-      data: null
+      message: 'Product updated successfully',
+      data: updatedProduct
+    });
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update product',
+      error: error.message
+    });
+  }
+});
+
+// Delete product
+router.delete('/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+
+    // Delete images from Cloudinary
+    if (product.images && product.images.length > 0) {
+      for (const imageUrl of product.images) {
+        try {
+          // Extract public_id from Cloudinary URL
+          const publicId = imageUrl.split('/').slice(-2).join('/').split('.')[0];
+          await deleteFromCloudinary(publicId);
+          console.log(`Deleted image: ${publicId}`);
+        } catch (deleteError) {
+          console.error('Error deleting image from Cloudinary:', deleteError);
+        }
+      }
+    }
+
+    await Product.findByIdAndDelete(req.params.id);
+
+    res.json({
+      success: true,
+      message: 'Product deleted successfully'
     });
   } catch (error) {
     console.error('Error deleting product:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       message: 'Failed to delete product',
-      data: null
+      error: error.message
     });
   }
 });
 
-module.exports = router; 
+// Get product categories
+router.get('/categories/list', async (req, res) => {
+  try {
+    const categories = await Product.distinct('category', { is_active: true });
+    
+    res.json({
+      success: true,
+      message: 'Categories fetched successfully',
+      data: categories
+    });
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch categories',
+      error: error.message
+    });
+  }
+});
+
+// Update product status
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const { is_active } = req.body;
+    
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      { is_active },
+      { new: true, runValidators: true }
+    );
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Product status updated successfully',
+      data: product
+    });
+  } catch (error) {
+    console.error('Error updating product status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update product status',
+      error: error.message
+    });
+  }
+});
+
+// Add featured products endpoint
+router.get('/featured/list', async (req, res) => {
+  try {
+    const featuredProducts = await Product.find({ 
+      is_active: true,
+      featured: true 
+    })
+    .sort({ createdAt: -1 })
+    .limit(8)
+    .lean();
+
+    res.json({
+      success: true,
+      message: 'Featured products fetched successfully',
+      data: featuredProducts
+    });
+  } catch (error) {
+    console.error('Error fetching featured products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch featured products',
+      error: error.message
+    });
+  }
+});
+
+module.exports = router;
