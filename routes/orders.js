@@ -2,6 +2,34 @@ const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order');
 
+// Debug endpoint to test database connection and orders
+router.get('/debug', async (req, res) => {
+  try {
+    const orderCount = await Order.countDocuments();
+    const pendingOrders = await Order.countDocuments({ status: 'Pending' });
+    const dispatchedOrders = await Order.countDocuments({ status: 'Dispatched' });
+    const deliveredOrders = await Order.countDocuments({ status: 'Delivered' });
+    
+    res.json({
+      success: true,
+      message: 'Order debug info',
+      data: {
+        totalOrders: orderCount,
+        pendingOrders,
+        dispatchedOrders,
+        deliveredOrders,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Debug failed',
+      error: error.message
+    });
+  }
+});
+
 // Get all orders (admin only)
 router.get('/', async (req, res) => {
   try {
@@ -23,18 +51,26 @@ router.get('/', async (req, res) => {
     const totalPages = Math.ceil(total / parseInt(limit));
     
     res.json({
-      orders,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages,
-        total,
-        hasNext: parseInt(page) < totalPages,
-        hasPrev: parseInt(page) > 1,
-      },
+      success: true,
+      message: 'Orders fetched successfully',
+      data: {
+        orders,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          total,
+          hasNext: parseInt(page) < totalPages,
+          hasPrev: parseInt(page) > 1,
+        }
+      }
     });
   } catch (error) {
     console.error('Error fetching orders:', error);
-    res.status(500).json({ error: 'Failed to fetch orders' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch orders',
+      error: error.message 
+    });
   }
 });
 
@@ -46,30 +82,87 @@ router.get('/:id', async (req, res) => {
       .lean();
     
     if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Order not found' 
+      });
     }
     
-    res.json(order);
+    res.json({
+      success: true,
+      message: 'Order fetched successfully',
+      data: order
+    });
   } catch (error) {
     console.error('Error fetching order:', error);
-    res.status(500).json({ error: 'Failed to fetch order' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch order',
+      error: error.message 
+    });
   }
 });
 
 // Create new order
 router.post('/', async (req, res) => {
   try {
+    console.log('Received order data:', JSON.stringify(req.body, null, 2));
+    
+    // Validate required fields
+    const { customer, shippingAddress, items, totalAmount } = req.body;
+    
+    if (!customer || !customer.name || !customer.email || !customer.phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer information is required (name, email, phone)'
+      });
+    }
+    
+    if (!shippingAddress || !shippingAddress.street || !shippingAddress.city || 
+        !shippingAddress.state || !shippingAddress.zipCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Complete shipping address is required'
+      });
+    }
+    
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Order items are required'
+      });
+    }
+    
+    if (!totalAmount || totalAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Total amount must be greater than 0'
+      });
+    }
+    
+    // Create the order
     const order = new Order(req.body);
     await order.save();
     
+    // Populate the order with product details
     const populatedOrder = await Order.findById(order._id)
       .populate('items.product')
       .lean();
     
-    res.status(201).json(populatedOrder);
+    console.log('Order created successfully:', populatedOrder._id);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Order created successfully',
+      data: populatedOrder
+    });
   } catch (error) {
     console.error('Error creating order:', error);
-    res.status(500).json({ error: 'Failed to create order' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to create order',
+      error: error.message 
+    });
   }
 });
 
@@ -78,8 +171,11 @@ router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     
-    if (!['Pending', 'Dispatched', 'Delivered'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
+    if (!['Pending', 'Dispatched', 'Delivered', 'Cancelled'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid status. Must be one of: Pending, Dispatched, Delivered, Cancelled' 
+      });
     }
     
     const order = await Order.findByIdAndUpdate(
@@ -89,13 +185,51 @@ router.patch('/:id/status', async (req, res) => {
     ).populate('items.product');
     
     if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Order not found' 
+      });
     }
     
-    res.json(order);
+    res.json({
+      success: true,
+      message: 'Order status updated successfully',
+      data: order
+    });
   } catch (error) {
     console.error('Error updating order status:', error);
-    res.status(500).json({ error: 'Failed to update order status' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to update order status',
+      error: error.message 
+    });
+  }
+});
+
+// Delete order (admin only)
+router.delete('/:id', async (req, res) => {
+  try {
+    const order = await Order.findByIdAndDelete(req.params.id);
+    
+    if (!order) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Order not found' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Order deleted successfully',
+      data: order
+    });
+  } catch (error) {
+    console.error('Error deleting order:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to delete order',
+      error: error.message 
+    });
   }
 });
 
@@ -106,22 +240,33 @@ router.get('/stats/summary', async (req, res) => {
     const pendingOrders = await Order.countDocuments({ status: 'Pending' });
     const dispatchedOrders = await Order.countDocuments({ status: 'Dispatched' });
     const deliveredOrders = await Order.countDocuments({ status: 'Delivered' });
+    const cancelledOrders = await Order.countDocuments({ status: 'Cancelled' });
     
     const totalRevenue = await Order.aggregate([
+      { $match: { status: { $ne: 'Cancelled' } } },
       { $group: { _id: null, total: { $sum: '$totalAmount' } } }
     ]);
     
     res.json({
-      totalOrders,
-      pendingOrders,
-      dispatchedOrders,
-      deliveredOrders,
-      totalRevenue: totalRevenue[0]?.total || 0,
+      success: true,
+      message: 'Order statistics fetched successfully',
+      data: {
+        totalOrders,
+        pendingOrders,
+        dispatchedOrders,
+        deliveredOrders,
+        cancelledOrders,
+        totalRevenue: totalRevenue[0]?.total || 0,
+      }
     });
   } catch (error) {
     console.error('Error fetching order stats:', error);
-    res.status(500).json({ error: 'Failed to fetch order statistics' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch order statistics',
+      error: error.message 
+    });
   }
 });
 
-module.exports = router; 
+module.exports = router;

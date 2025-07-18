@@ -240,6 +240,20 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Test endpoint for API connectivity
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'API is working correctly',
+    data: {
+      timestamp: new Date().toISOString(),
+      method: req.method,
+      headers: req.headers,
+      environment: process.env.NODE_ENV || 'development'
+    }
+  });
+});
+
 // Error handler
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
